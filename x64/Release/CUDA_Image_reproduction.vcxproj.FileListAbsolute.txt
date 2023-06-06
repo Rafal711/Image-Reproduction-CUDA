@@ -1,0 +1,2 @@
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\CUDA_project_GA\CUDA_Image_reproduction\x64\Release\CUDA_Image_reproduction.exe
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\x64\Release\CUDA_Image_reproduction.exe

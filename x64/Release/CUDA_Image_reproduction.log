@@ -1,0 +1,42 @@
+﻿  Compiling CUDA source file image_reproduction.cu...
+  
+  C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA>"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin\nvcc.exe" -gencode=arch=compute_52,code=\"sm_52,compute_52\" --use-local-env -ccbin "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.36.32532\bin\HostX64\x64" -x cu   -I"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\include" -I"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\include"     --keep-dir x64\Release  -maxrregcount=0   --machine 64 --compile -cudart static    -DNDEBUG -D_CONSOLE -D_UNICODE -DUNICODE -Xcompiler "/EHsc /W3 /nologo /O2 /FS   /MD " -Xcompiler "/Fdx64\Release\vc143.pdb" -o C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\x64\Release\image_reproduction.cu.obj "C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\image_reproduction.cu" 
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\image_reproduction.cu(23): warning #1056-D: returning pointer to local variable
+        return &result;
+               ^
+  
+  Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+  
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\image_reproduction.cu(23): warning #1056-D: returning pointer to local variable
+        return &result;
+               ^
+  
+  Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+  
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\image_reproduction.cu(31): warning #177-D: variable "number_of_iterations" was declared but never referenced
+        int number_of_iterations = 10000;
+            ^
+  
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\image_reproduction.cu(34): warning #177-D: variable "number_of_parents" was declared but never referenced
+        int number_of_parents = 4;
+            ^
+  
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\image_reproduction.cu(35): warning #177-D: variable "number_of_offsprings" was declared but never referenced
+        int number_of_offsprings = 8;
+            ^
+  
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\image_reproduction.cu(38): warning #177-D: variable "mutation_percentage" was declared but never referenced
+        float mutation_percentage = 0.01;
+              ^
+  
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\image_reproduction.cu(42): warning #177-D: variable "terminate_after" was declared but never referenced
+        int terminate_after = 500;
+            ^
+  
+  image_reproduction.cu
+  tmpxft_00005968_00000000-7_image_reproduction.cudafe1.cpp
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\image_reproduction.cu(38): warning C4305: "inicjowanie": obcięcie z "double" do "float"
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\image_reproduction.cu(41): warning C4244: "inicjowanie": konwersja z "double" do "float", możliwa utrata danych
+C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\image_reproduction.cu(23): warning C4172: zwracanie adresu lokalnej zmiennej lub tymczasowej: result
+  LINK : określono opcję /LTCG, lecz generowanie kodu nie było wymagane; usuń opcję /LTCG z wiersza polecenia konsolidatora w celu podwyższenia wydajności konsolidatora
+  CUDA_Image_reproduction.vcxproj -> C:\Users\Dell\Desktop\Milosz\II_stopien_studiow\Systemy_rozproszone\Image-Reproduction-CUDA\x64\Release\CUDA_Image_reproduction.exe

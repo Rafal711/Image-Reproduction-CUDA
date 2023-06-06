@@ -33,7 +33,3 @@
 
 # Visual Studio
 .vs/
-*.vcxproj
-*.filters
-*.user
-x64/
