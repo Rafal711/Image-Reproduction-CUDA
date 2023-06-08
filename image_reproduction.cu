@@ -1,4 +1,7 @@
 #include <cuda_runtime.h>
+#include <curand.h>
+#include <curand_kernel.h>
+#include "device_launch_parameters.h"
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -6,6 +9,79 @@
 
 #include <iostream>
 #include <string>
+#include <vector>
+
+#include <stdio.h>
+#include <math.h>
+
+//crossover operation functions
+//running on max 1024 threads since that is a max chromosome length
+//function running in one block (?)
+
+//single single-point crossover operation
+__device__ void single_point(const uint8_t* parent_one, const uint8_t* parent_two,
+                             uint8_t* offspring_one, uint8_t* offspring_two, const int* crossover_point) {
+
+    int id = threadIdx.x; //get the ID of a thread
+    //int id = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (id <= *crossover_point) {
+        offspring_one[id] = parent_one[id];
+        offspring_two[id] = parent_two[id];
+    }
+    else {
+        offspring_one[id] = parent_two[id];
+        offspring_two[id] = parent_one[id];
+    }
+
+}
+
+
+//single two-point crossover operation
+__device__ void two_point(const uint8_t* parent_one, const uint8_t* parent_two,
+                          uint8_t* offspring_one, uint8_t* offspring_two,
+                          const int* first_crossover_point, const int* second_crossover_point) {
+
+    int id = threadIdx.x; //get the ID of a thread
+    //int id = blockDim.x * blockIdx.x + threadIdx.x;
+
+
+    if (id <= *first_crossover_point || id > *second_crossover_point) {
+        offspring_one[id] = parent_one[id];
+        offspring_two[id] = parent_two[id];
+    }
+    else {
+        offspring_one[id] = parent_two[id];
+        offspring_two[id] = parent_one[id];
+    }
+
+}
+
+
+//single uniform crossover operation
+__device__ void uniform(const uint8_t* parent_one, const uint8_t* parent_two,
+                        uint8_t* offspring_one, uint8_t* offspring_two,
+                        const bool* crossover_mask) {
+
+    int id = threadIdx.x; //get the ID of a thread
+    //int id = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (crossover_mask[id]) {
+        offspring_one[id] = parent_two[id];
+        offspring_two[id] = parent_one[id];
+    }
+    else {
+        offspring_one[id] = parent_one[id];
+        offspring_two[id] = parent_two[id];
+    }
+}
+
+
+__device__ void perform_crossover() {
+    //TODO
+}
+
+
 
 cv::Mat* imgRGB2chromosome(cv::Mat image) {
     cv::Mat* reshaped_img = new cv::Mat();
@@ -13,14 +89,11 @@ cv::Mat* imgRGB2chromosome(cv::Mat image) {
     return reshaped_img;
 }
 
-cv::Mat* reproduce_image(cv::Mat original_image) {
+void reproduce_image(cv::Mat original_image) {
     cv::Mat* chromosome_base = imgRGB2chromosome(original_image);
 
     std::cout << "Original size: " << original_image.size << std::endl;
     std::cout << "Reshaped size: " << chromosome_base->size << std::endl;
-
-    cv::Mat result;
-    return &result;
 
 }
 
@@ -41,7 +114,8 @@ void run_program() {
     float epsilon = pow(10, -12);
     int terminate_after = 500;
 
-    cv::Mat* result_image = reproduce_image(img);
+    reproduce_image(img);
+
 
 
     //cv::namedWindow("First OpenCV Application", cv::WINDOW_AUTOSIZE);
