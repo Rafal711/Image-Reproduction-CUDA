@@ -20,6 +20,10 @@
     printf("Error at %s:%d\n",__FILE__,__LINE__); \
     return EXIT_FAILURE;}} while(0)
 
+#define CUDA_CALL_V(x) do { if((x) != cudaSuccess) { \
+    printf("Error at %s:%d\n",__FILE__,__LINE__); \
+    return;}} while(0)
+
 ///////////////////////////////////////////////////////////////////////////////////////
 // CROSSOVER
 
@@ -214,6 +218,39 @@ __global__ void populationInit_multi_blocks(uint8_t* population, curandState* st
     population[idx] = (uint8_t)(ceil((curand_uniform(&(state[idx])) * (range + 1))) - 1);;
 }
 
+__global__ void sum_individual_chromosomes(uint8_t* population, float* chromosomes_sums) {
+    extern __shared__ float sum_result[];
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    sum_result[blockIdx.x] = 0;
+    atomicAdd(&sum_result[blockIdx.x], static_cast<float>(population[idx]));
+    __syncthreads();
+    chromosomes_sums[blockIdx.x] = sum_result[blockIdx.x];
+}
+
+__global__ void abs_subtract_individual_chromosomes(uint8_t* base_chromosome, uint8_t* population, float* chromosomes_differences) {
+    extern __shared__ float subtraction_result[];
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    subtraction_result[idx] = static_cast<float>(population[idx] - base_chromosome[threadIdx.x]);
+    __syncthreads();
+    chromosomes_differences[idx] = abs(subtraction_result[idx]);
+}
+
+void fitness_function(uint8_t* base_chromosome, uint8_t* population, uint16_t multiple_population_size, uint16_t number_of_blocks, uint16_t number_of_threads, float* population_fitness) {
+    float* h_chromosomes_abs_differences = new float[multiple_population_size];
+    float* d_chromosomes_abs_differences;
+    CUDA_CALL_V(cudaMalloc(&d_chromosomes_abs_differences, sizeof(float) * multiple_population_size));
+
+
+    abs_subtract_individual_chromosomes << < number_of_blocks, number_of_threads >> > (base_chromosome, population, d_chromosomes_abs_differences);
+
+    CUDA_CALL_V(cudaMemcpy(h_chromosomes_abs_differences, d_chromosomes_abs_differences, sizeof(float) * multiple_population_size, cudaMemcpyDeviceToHost));
+    for (std::size_t i = 0; i < multiple_population_size; ++i) {
+        std::cout << h_chromosomes_abs_differences[i] << " ";
+    }
+    delete[] h_chromosomes_abs_differences;
+    cudaFree(d_chromosomes_abs_differences);
+}
+
 __host__ void run_program() {
     std::string image_path = "tangerines.jpg";
     cv::Mat image = cv::imread(image_path);
@@ -243,12 +280,24 @@ __host__ void run_program() {
     uint16_t multiple_population_size = population_size * nr_of_parallel_algorithms * chromosome_size;
 
 
-    // HOST concatenated population allocation
-    uint8_t* h_mpopulation = new uint8_t[multiple_population_size];
+    // HOST variables allocation
+    uint8_t* h_mpopulation = new uint8_t[multiple_population_size]; // host population
+    float* h_mpopulation_fitness = new float[number_of_blocks]; // fitness for host population
+    uint8_t* h_bchromosome = new uint8_t[chromosome_size]; // base chromosome
 
-    // DEVICE concatenated population allocation
+    // DEVICE variables allocation
     uint8_t* d_mpopulation;
     CUDA_CALL(cudaMalloc(&d_mpopulation, sizeof(uint8_t) * multiple_population_size));
+
+    uint8_t* d_bchromosome;
+    CUDA_CALL(cudaMalloc(&d_bchromosome, sizeof(uint8_t) * chromosome_size));
+
+    float* d_mpopulation_fitness;
+    CUDA_CALL(cudaMalloc(&d_mpopulation_fitness, sizeof(float) * number_of_blocks));
+
+    // Host -> Device
+    CUDA_CALL(cudaMemcpy(d_mpopulation, h_mpopulation, sizeof(uint8_t) * multiple_population_size, cudaMemcpyHostToDevice));
+    CUDA_CALL(cudaMemcpy(d_bchromosome, h_bchromosome, sizeof(uint8_t) * chromosome_size, cudaMemcpyHostToDevice));
 
     // DEVICE curandState initialization
     curandState* devStates;
@@ -260,15 +309,18 @@ __host__ void run_program() {
 
 
 
-
+    //fitness_function(d_bchromosome, d_mpopulation, multiple_population_size, number_of_blocks, number_of_threads, d_mpopulation_fitness);
 
 
 
 
     // ------------------------------------------ genetic algorithm end ------------------------------------------
 
+    // DEVICE -> HOST
+
     CUDA_CALL(cudaMemcpy(h_mpopulation, d_mpopulation, sizeof(uint8_t) * multiple_population_size, cudaMemcpyDeviceToHost));
     cudaDeviceSynchronize();
+    CUDA_CALL(cudaMemcpy(h_mpopulation_fitness, d_mpopulation_fitness, sizeof(float) * number_of_blocks, cudaMemcpyDeviceToHost));
 
     // show results
     for (std::size_t i = 0; i < multiple_population_size; ++i) {
@@ -277,8 +329,12 @@ __host__ void run_program() {
 
     // free all device memory
     cudaFree(d_mpopulation);
+    cudaFree(d_mpopulation_fitness);
+    cudaFree(d_bchromosome);
     // free all host memory
     delete[] h_mpopulation;
+    delete[] h_mpopulation_fitness;
+    delete[] h_bchromosome;
 
 
 
