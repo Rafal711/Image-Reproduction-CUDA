@@ -311,6 +311,7 @@ __host__ void run_program() {
     cudaFree(&d_state);
     ////Display the result image
     //cv::Mat resultImage = grayArrayToCvMat(image, grayArray);
+    //delete[] grayArray;
     //cv::imwrite("Result.jpg", image);
     //cv::namedWindow("Result image", cv::WINDOW_AUTOSIZE);
     //cv::imshow("Result image", resultImage);
