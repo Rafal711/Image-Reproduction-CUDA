@@ -177,13 +177,18 @@ __global__ void setup_curand(curandState* state) {
 }
 
 
-void imgRGB2chromosome(cv::Mat image, uint8_t* chromosome) {
+void cvMatToGrayArray(const cv::Mat& image, uint8_t* array) {
+    cv::Mat greyMat;
+    cv::cvtColor(image, greyMat, cv::COLOR_BGR2GRAY);
 
-    // TODO: convert cv::Mat image to chromosome
+    for (int i = 0; i < greyMat.rows * greyMat.cols; i++) {
+        array[i] = *(greyMat.begin<uint8_t>() + i);
+    }
+}
 
-    /*cv::Mat* reshaped_img = new cv::Mat();
-    *reshaped_img = image.reshape(1, 1);
-    return reshaped_img;*/
+cv::Mat grayArrayToCvMat(const cv::Mat& image, const uint8_t* array) {
+    cv::Mat reshaped = cv::Mat(image.rows * image.cols, 1, CV_8UC1, (unsigned*)array).reshape(0, image.rows);
+    return reshaped;
 }
 
 __host__ void generate_all_idx_combinations(int* pairs, int max_idx) {
@@ -211,7 +216,9 @@ __global__ void populationInit_multi_blocks(uint8_t* population, curandState* st
 
 __host__ void run_program() {
     std::string image_path = "tangerines.jpg";
-    cv::Mat img = cv::imread(image_path);
+    cv::Mat image = cv::imread(image_path);
+    uint8_t* grayArray = new uint8_t[image.rows * image.cols];
+    cvMatToGrayArray(image, grayArray);
 
     uint16_t number_of_iterations = 10000;
 
@@ -303,8 +310,10 @@ __host__ void run_program() {
     delete[] combinations;
     cudaFree(&d_state);
     ////Display the result image
+    //cv::Mat resultImage = grayArrayToCvMat(image, grayArray);
+    //cv::imwrite("Result.jpg", image);
     //cv::namedWindow("Result image", cv::WINDOW_AUTOSIZE);
-    //cv::imshow("Result image", img);
+    //cv::imshow("Result image", resultImage);
     //cv::moveWindow("Result image", 0, 45);
     //cv::waitKey(0);
     //cv::destroyAllWindows();
