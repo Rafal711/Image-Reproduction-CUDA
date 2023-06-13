@@ -16,6 +16,10 @@
 
 #define N 1024 // max number of threads in one block
 
+#define CUDA_CALL(x) do { if((x) != cudaSuccess) { \
+    printf("Error at %s:%d\n",__FILE__,__LINE__); \
+    return EXIT_FAILURE;}} while(0)
+
 ///////////////////////////////////////////////////////////////////////////////////////
 // CROSSOVER
 
@@ -193,24 +197,87 @@ __host__ void generate_all_idx_combinations(int* pairs, int max_idx) {
     }
 }
 
+__global__ void setup_kernel_multi_blocks(curandState* state, uint16_t seed_offset)
+{
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    curand_init(seed_offset + idx, idx, 0, &state[idx]);
+}
+
+__global__ void populationInit_multi_blocks(uint8_t* population, curandState* state) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    const int range{ 255 };
+    population[idx] = (uint8_t)(ceil((curand_uniform(&(state[idx])) * (range + 1))) - 1);;
+}
+
 __host__ void run_program() {
     std::string image_path = "tangerines.jpg";
     cv::Mat img = cv::imread(image_path);
 
-    int number_of_iterations = 10000;
+    uint16_t number_of_iterations = 10000;
 
     // GA reproduction parameters
-    int number_of_parents = 4;
-    int number_of_offsprings = 8;
+    uint16_t number_of_parents = 4;
+    uint16_t number_of_offsprings = 8;
 
     // mutation parameters
     float mutation_percentage = 0.01;
 
     // termination condition
-    float epsilon = pow(10, -12);
-    int terminate_after = 500;
+    float epsilon = 1.0E-12F;
+    uint16_t terminate_after = 500;
 
-    int nr_of_parallel_algorithms = 4;
+    uint16_t nr_of_parallel_algorithms = 4;
+    
+
+    uint16_t chromosome_size = 5;
+    uint16_t population_size = 4;
+    uint16_t number_of_threads = chromosome_size;
+    uint16_t number_of_algorithms = 3; //number of blocks deprecated
+    uint16_t multiple_population_size = population_size * number_of_algorithms * chromosome_size;
+
+
+    // HOST concatenated population allocation
+    uint8_t* h_mpopulation = new uint8_t[multiple_population_size];
+
+    // DEVICE concatenated population allocation
+    uint8_t* d_mpopulation;
+    CUDA_CALL(cudaMalloc(&d_mpopulation, sizeof(uint8_t) * multiple_population_size));
+
+    // DEVICE curandState initialization
+    curandState* devStates;
+    CUDA_CALL(cudaMalloc((void**)&devStates, multiple_population_size * sizeof(curandState)));
+
+    // ------------------------------------------ genetic algorithm start ------------------------------------------
+    setup_kernel_multi_blocks <<< multiple_population_size, number_of_threads >>> (devStates, 7);
+    populationInit_multi_blocks <<< multiple_population_size, number_of_threads >>> (d_mpopulation, devStates);
+
+
+
+
+
+
+
+
+    // ------------------------------------------ genetic algorithm end ------------------------------------------
+
+    CUDA_CALL(cudaMemcpy(h_mpopulation, d_mpopulation, sizeof(uint8_t) * multiple_population_size, cudaMemcpyDeviceToHost));
+    cudaDeviceSynchronize();
+
+    // show results
+    for (std::size_t i = 0; i < multiple_population_size; ++i) {
+        std::cout << static_cast<int>(h_mpopulation[i]) << " ";
+    }
+
+    // free all device memory
+    cudaFree(d_mpopulation);
+    // free all host memory
+    delete[] h_mpopulation;
+
+
+
+
+
+
 
     // for random number generation on GPU
     curandState* d_state;
