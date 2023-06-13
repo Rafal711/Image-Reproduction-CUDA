@@ -233,14 +233,14 @@ __host__ void run_program() {
     float epsilon = 1.0E-12F;
     uint16_t terminate_after = 500;
 
-    uint16_t nr_of_parallel_algorithms = 4;
+    uint16_t nr_of_parallel_algorithms = 3;
     
 
     uint16_t chromosome_size = 5;
     uint16_t population_size = 4;
     uint16_t number_of_threads = chromosome_size;
-    uint16_t number_of_algorithms = 3; //number of blocks deprecated
-    uint16_t multiple_population_size = population_size * number_of_algorithms * chromosome_size;
+    uint16_t number_of_blocks = population_size * nr_of_parallel_algorithms;
+    uint16_t multiple_population_size = population_size * nr_of_parallel_algorithms * chromosome_size;
 
 
     // HOST concatenated population allocation
@@ -255,8 +255,8 @@ __host__ void run_program() {
     CUDA_CALL(cudaMalloc((void**)&devStates, multiple_population_size * sizeof(curandState)));
 
     // ------------------------------------------ genetic algorithm start ------------------------------------------
-    setup_kernel_multi_blocks <<< multiple_population_size, number_of_threads >>> (devStates, 7);
-    populationInit_multi_blocks <<< multiple_population_size, number_of_threads >>> (d_mpopulation, devStates);
+    setup_kernel_multi_blocks <<< number_of_blocks, number_of_threads >>> (devStates, 7);
+    populationInit_multi_blocks <<< number_of_blocks, number_of_threads >>> (d_mpopulation, devStates);
 
 
 
