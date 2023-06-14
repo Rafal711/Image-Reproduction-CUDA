@@ -227,28 +227,55 @@ __global__ void sum_individual_chromosomes(uint8_t* population, float* chromosom
     chromosomes_sums[blockIdx.x] = sum_result[blockIdx.x];
 }
 
+__global__ void sum_individual_chromosomes(float* population, float* chromosomes_sums) {
+    extern __shared__ float sum_result[];
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    sum_result[blockIdx.x] = 0;
+    atomicAdd(&sum_result[blockIdx.x], population[idx]);
+    __syncthreads();
+    chromosomes_sums[blockIdx.x] = sum_result[blockIdx.x];
+}
+
 __global__ void abs_subtract_individual_chromosomes(uint8_t* base_chromosome, uint8_t* population, float* chromosomes_differences) {
     extern __shared__ float subtraction_result[];
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    subtraction_result[idx] = static_cast<float>(population[idx] - base_chromosome[threadIdx.x]);
+    subtraction_result[idx] = static_cast<float>(base_chromosome[threadIdx.x] - population[idx]);
     __syncthreads();
     chromosomes_differences[idx] = abs(subtraction_result[idx]);
 }
 
-void fitness_function(uint8_t* base_chromosome, uint8_t* population, uint16_t multiple_population_size, uint16_t number_of_blocks, uint16_t number_of_threads, float* population_fitness) {
-    float* h_chromosomes_abs_differences = new float[multiple_population_size];
-    float* d_chromosomes_abs_differences;
-    CUDA_CALL_V(cudaMalloc(&d_chromosomes_abs_differences, sizeof(float) * multiple_population_size));
+__global__ void subtract_individual_chromosomes(float* base_chromosome, float* population, float* chromosomes_differences) {
+    extern __shared__ float subtraction_result[];
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    subtraction_result[idx] = static_cast<float>(base_chromosome[threadIdx.x] - population[idx]);
+    __syncthreads();
+    chromosomes_differences[idx] = subtraction_result[idx];
+}
 
+__global__ void divide_vector_element_wise(float* cuda_vector, float denominator) {
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    cuda_vector[idx] = cuda_vector[idx] / denominator;
+    __syncthreads();
+}
 
-    abs_subtract_individual_chromosomes << < number_of_blocks, number_of_threads >> > (base_chromosome, population, d_chromosomes_abs_differences);
+void fitness_function(uint8_t* base_chromosome, uint16_t chromosome_size, uint8_t* population, uint16_t multiple_population_size, uint16_t number_of_blocks, uint16_t number_of_threads, float* population_fitness) {
 
-    CUDA_CALL_V(cudaMemcpy(h_chromosomes_abs_differences, d_chromosomes_abs_differences, sizeof(float) * multiple_population_size, cudaMemcpyDeviceToHost));
-    for (std::size_t i = 0; i < multiple_population_size; ++i) {
-        std::cout << h_chromosomes_abs_differences[i] << " ";
-    }
-    delete[] h_chromosomes_abs_differences;
-    cudaFree(d_chromosomes_abs_differences);
+    float* d_partial_results; float* d_base_chromosome_sum;
+    CUDA_CALL_V(cudaMalloc(&d_partial_results, sizeof(float) * multiple_population_size));
+    CUDA_CALL_V(cudaMalloc(&d_base_chromosome_sum, sizeof(float) * number_of_blocks));
+
+    abs_subtract_individual_chromosomes <<< number_of_blocks, number_of_threads, sizeof(float)* multiple_population_size >>> (base_chromosome, population, d_partial_results);
+
+    sum_individual_chromosomes <<< number_of_blocks, number_of_threads, number_of_blocks * sizeof(float) >>> (d_partial_results, population_fitness);
+
+    divide_vector_element_wise <<< number_of_blocks, 1 >>> (population_fitness, chromosome_size);
+
+    sum_individual_chromosomes <<< 1, number_of_threads, sizeof(float) >>> (base_chromosome, d_base_chromosome_sum);
+
+    subtract_individual_chromosomes <<< number_of_blocks, 1, sizeof(float)* number_of_blocks >>> (d_base_chromosome_sum, population_fitness, population_fitness);
+
+    cudaFree(d_partial_results);
+    cudaFree(d_base_chromosome_sum);
 }
 
 __host__ void run_program() {
@@ -309,7 +336,7 @@ __host__ void run_program() {
 
 
 
-    //fitness_function(d_bchromosome, d_mpopulation, multiple_population_size, number_of_blocks, number_of_threads, d_mpopulation_fitness);
+    //fitness_function(d_bchromosome, chromosome_size, d_mpopulation, multiple_population_size, number_of_blocks, number_of_threads, d_mpopulation_fitness);
 
 
 
