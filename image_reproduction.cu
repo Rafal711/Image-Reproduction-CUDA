@@ -24,6 +24,31 @@
     printf("Error at %s:%d\n",__FILE__,__LINE__); \
     return;}} while(0)
 
+
+
+__device__ void generate_random_unique_array(curandState * state, uint16_t * tab,
+    const int length, const int min, const int max) {
+
+    int state_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (int i = 0; i < length; i++) {
+        bool unique = 0;
+        while (!unique) {
+            unique = 1;
+            float random = curand_uniform(&state[state_idx]);
+            random *= (max - min + 0.999999);
+            tab[i] = (uint16_t)truncf(random);
+            for (int j = 0; j < i; j++) {
+                if (tab[i] == tab[j]) {
+                    unique = 0;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+
 ///////////////////////////////////////////////////////////////////////////////////////
 // CROSSOVER
 
@@ -33,152 +58,131 @@ enum Crossover_method {
     UNIFORM
 };
 
-
-// crossover operation functions
-// running as CHILD kernels - 1D grid, block -> crossover of one pair, thread in a block -> gene in a chromosome 
-
 // single single-point crossover operation
-__global__ void single_point(const uint8_t* parents[], uint8_t* offsprings[], const int* crossover_point) {
+__device__ void single_point(const uint8_t* parentA, const uint8_t* parentB,
+                             uint8_t* offspringA, uint8_t* offspringB,
+                             const uint16_t crossover_point) {
 
     int gene_idx = threadIdx.x;   // index of a gene in a parent chromosome
-    int pair_idx = 2 * blockIdx.x;    // index of a pair of parents
 
-    int offspring_idx = pair_idx;
-
-    if (gene_idx <= *crossover_point) {
-        offsprings[offspring_idx][gene_idx] = parents[pair_idx][gene_idx];
-        offsprings[offspring_idx+1][gene_idx] = parents[pair_idx+1][gene_idx];
+    if (gene_idx <= crossover_point) {
+        offspringA[gene_idx] = parentA[gene_idx];
+        offspringB[gene_idx] = parentB[gene_idx];
     }
     else {
-        offsprings[offspring_idx][gene_idx] = parents[pair_idx+1][gene_idx];
-        offsprings[offspring_idx+1][gene_idx] = parents[pair_idx][gene_idx];
+        offspringA[gene_idx] = parentB[gene_idx];
+        offspringB[gene_idx] = parentA[gene_idx];
     }
 
 }
-
 
 // single two-point crossover operation
-__global__ void two_point(const uint8_t* parents[], uint8_t* offsprings[],
-                          const int* first_crossover_point, const int* second_crossover_point) {
+__device__ void two_point(const uint8_t* parentA, const uint8_t* parentB,
+                          uint8_t* offspringA, uint8_t* offspringB,
+                          const int first_crossover_point, const int second_crossover_point) {
 
     int gene_idx = threadIdx.x;   // index of a gene in a parent chromosome
-    int pair_idx = 2 * blockIdx.x;    // index of a pair of parents
 
-    int offspring_idx = pair_idx;
-
-    if (gene_idx <= *first_crossover_point || gene_idx > *second_crossover_point) {
-        offsprings[offspring_idx][gene_idx] = parents[pair_idx][gene_idx];
-        offsprings[offspring_idx + 1][gene_idx] = parents[pair_idx+1][gene_idx];
+    if (gene_idx <= first_crossover_point || gene_idx > second_crossover_point) {
+        offspringA[gene_idx] = parentA[gene_idx];
+        offspringB[gene_idx] = parentB[gene_idx];
     }
     else {
-        offsprings[offspring_idx][gene_idx] = parents[pair_idx+1][gene_idx];
-        offsprings[offspring_idx + 1][gene_idx] = parents[pair_idx][gene_idx];
+        offspringA[gene_idx] = parentB[gene_idx];
+        offspringB[gene_idx] = parentA[gene_idx];
     }
 }
-
 
 // single uniform crossover operation
-__global__ void uniform(const uint8_t* parents[], uint8_t* offsprings[], const bool* crossover_mask) {
+__device__ void uniform(const uint8_t* parentA, const uint8_t* parentB,
+                        uint8_t* offspringA, uint8_t* offspringB,
+                        const bool crossover_mask) {
 
     int gene_idx = threadIdx.x;   // index of a gene in a parent chromosome
-    int pair_idx = 2* blockIdx.x;    // index of a pair of parents
-    int offspring_idx = pair_idx;
 
-    if (crossover_mask[gene_idx]) {
-        offsprings[offspring_idx][gene_idx] = parents[pair_idx+1][gene_idx];
-        offsprings[offspring_idx + 1][gene_idx] = parents[pair_idx][gene_idx];
+    if (crossover_mask) {
+        offspringA[gene_idx] = parentB[gene_idx];
+        offspringB[gene_idx] = parentA[gene_idx];
     }
     else {
-        offsprings[offspring_idx][gene_idx] = parents[pair_idx][gene_idx];
-        offsprings[offspring_idx + 1][gene_idx] = parents[pair_idx+1][gene_idx];
+        offspringA[gene_idx] = parentA[gene_idx];
+        offspringB[gene_idx] = parentB[gene_idx];
     }
 }
 
+// choosing parent pairs and calling a chosen crossover method 
+__global__ void perform_crossover(uint8_t* selected_pool, uint8_t* offsprings,
+                                  const uint16_t number_of_offsprings, const Crossover_method method,
+                                  const uint16_t pool_size, const uint16_t chromosome_length,
+                                  curandState* state, const uint16_t* combinations, uint16_t* random_ids) {
 
-__device__ void generate_random_unique_array(curandState* state, const int state_idx, int* tab, const int length, const int max) {
-    for (int i = 0; i < length; i++) {
-        bool unique = 0;
-        while (!unique) {
-            unique = 1;
-            float random = curand_uniform(&state[state_idx]);
-            random *= (max + 0.999999);
-            tab[i] = (int)truncf(random);
-            for (int j = 0; j < i; j++) {
-                if (tab[i] == tab[j]) {
-                    unique = 0;
-                    break;
-                }
-            }
-        }
-    } 
-}
+    // calculating indices
+    int algorithm_idx = blockIdx.x;
+    int block_population_start_idx = algorithm_idx * pool_size * chromosome_length;
+    int gene_idx = threadIdx.x + block_population_start_idx;
 
+    int block_offsprings_start = algorithm_idx * number_of_offsprings * chromosome_length;
 
-// crossover over a given mating pool (called for every thread (algorithm) in reproduce_image())
-__device__ void perform_crossover(const uint8_t** mating_pool[], uint8_t** offsprings[],
-                                  const Crossover_method method, const int* combinations,
-                                  const int mating_pool_length, const int number_of_offsprings, 
-                                  curandState* state) {
-
-    int algorithm_idx = threadIdx.x;
+    // nr of crossovers (nr of pairs to pick)
     const int number_of_crossovers = number_of_offsprings / 2;
 
-    // allocating memory for a 2D array of parent chromosomes (every 2 make a pair)
-    const uint8_t** parents = new uint8_t*[number_of_crossovers*2];
+    // generate array of random numbers (indices of pairs in combinations array), no repetitions
+    uint16_t max = pool_size * (pool_size - 1) / 2 - 1; //nr of possible combinations (-1 for indexing)
+    if (threadIdx.x == 0) {
+        //generate only once for the entire block
+        generate_random_unique_array(state, random_ids + block_population_start_idx, number_of_crossovers, 0, max);
+    }
+    __syncthreads(); //synchronize so all the threads see the generated values
+   
+    //iterating over parent pairs
+    for (int pair_id = 0; pair_id < number_of_crossovers; pair_id++) {
 
-    // generate array of random integers (pair idx in combinations array), no repetitions
-    int* rand_int = new int[number_of_crossovers];
-    generate_random_unique_array(state, algorithm_idx, rand_int, number_of_crossovers, mating_pool_length*(mating_pool_length-1)/2);
+        //get the indices of parents (based one previously randomly generated values)
+        uint16_t parentA_idx = combinations[2 * random_ids[block_population_start_idx + pair_id]];
+        uint16_t parentB_idx = combinations[2 * random_ids[block_population_start_idx + pair_id] + 1];
 
-    // pick pairs based on randomly generated array
-    for (int i = 0; i < number_of_crossovers; i++) {
-        parents[2 * i] = mating_pool[algorithm_idx][combinations[2 * rand_int[i]]];
-        parents[2 * i + 1] = mating_pool[algorithm_idx][combinations[2 * rand_int[i] + 1]];
-    }
-    
-    // launching crossover as child kernels
-    float random;
-    if (method == Crossover_method::SINGLE_POINT) {
-        random = curand_uniform(&state[algorithm_idx]) * (1024 + 0.999999);
-        int crossover_point = (int)truncf(random);
-        single_point << <number_of_crossovers, 1024 >> > (parents, offsprings[algorithm_idx], &crossover_point);
-    }
-    else if (method == Crossover_method::TWO_POINT) {
-        random = curand_uniform(&state[algorithm_idx]) * (1024 + 0.999999);
-        int first_crossover_point = (int)truncf(random);
-        random = curand_uniform(&state[algorithm_idx]) * (1024 + 0.999999);
-        int second_crossover_point = (int)truncf(random);
-        two_point << <number_of_crossovers, 1024 >> > (parents, offsprings[algorithm_idx], &first_crossover_point, &second_crossover_point);
-    }
-    else {
-        bool crossover_mask[1024];
-        //generate nr of genes to crossover
-        for (int i = 0; i < 1024; i++) {
-            random = curand_uniform(&state[algorithm_idx]) * (1 + 0.999999);
-            crossover_mask[i] = (int)truncf(random);
+        //pick parents from the mating pool 
+        uint8_t* parentA = selected_pool + chromosome_length * parentA_idx + block_population_start_idx;
+        uint8_t* parentB = selected_pool + chromosome_length * parentB_idx + block_population_start_idx;
+
+        //pick offsprings 
+        uint8_t* offspringA = offsprings + chromosome_length * 2 * pair_id + block_offsprings_start;
+        uint8_t* offspringB = offsprings + chromosome_length * (2 * pair_id + 1) + block_offsprings_start;
+
+
+        if (method == Crossover_method::SINGLE_POINT) {
+            __shared__ uint16_t crossover_point;
+            if (threadIdx.x == 0) {
+                float random = curand_uniform(&state[algorithm_idx]) * (chromosome_length - 1 + 0.999999);
+                crossover_point = (int)truncf(random);
+            }
+            __syncthreads();
+            single_point(parentA, parentB, offspringA, offspringB, crossover_point);
         }
-        uniform << <number_of_crossovers, 1024>> > (parents, offsprings[algorithm_idx], crossover_mask);
+        else if (method == Crossover_method::TWO_POINT) {
+            __shared__ uint16_t crossover_points[2];
+            if (threadIdx.x == 0) {
+                generate_random_unique_array(state, crossover_points, 2, 0, chromosome_length-1);
+            }
+            __syncthreads();
+            if (crossover_points[0] < crossover_points[1]) {
+                two_point(parentA, parentB, offspringA, offspringB, crossover_points[0], crossover_points[1]);
+            }
+            else {
+                two_point(parentA, parentB, offspringA, offspringB, crossover_points[1], crossover_points[0]);
+            }
+        }
+        else {
+            bool crossover_mask;
+            if (threadIdx.x < chromosome_length) {
+                crossover_mask = (bool)truncf(curand_uniform(&state[blockIdx.x * blockDim.x + threadIdx.x]) * (1 + 0.999999));
+            }
+            uniform(parentA, parentB, offspringA, offspringB, crossover_mask);
+        }
     }
-    
-    // freeing the memory
-    delete[] parents;
-    delete[] rand_int;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
-
-
-// main loop of the algorithm (kernel - 1 block with N threads, where 1 thread is 1 algorithm)
-__global__ void reproduce_image(uint8_t base_chromosome) {
-
-
-}
-
-
-__global__ void setup_curand(curandState* state) {
-    int idx = threadIdx.x;
-    curand_init(1234, idx, 0, &state[idx]);
-}
 
 
 void cvMatToGrayArray(const cv::Mat& image, uint8_t* array) {
@@ -195,13 +199,15 @@ cv::Mat grayArrayToCvMat(const cv::Mat& image, const uint8_t* array) {
     return reshaped;
 }
 
-__host__ void generate_all_idx_combinations(int* pairs, int max_idx) {
+
+__host__ void generate_all_idx_combinations(uint16_t* pairs, int max_idx) {
 
     int counter = 0;
-    for (int i = 0; i < max_idx; i++) {
-        for (int j = i; j < max_idx; j++) {
+    for (uint16_t i = 0; i <= max_idx; i++) {
+        for (uint16_t j = i + 1; j <= max_idx; j++) {
             pairs[2 * counter] = i;
             pairs[2 * counter + 1] = j;
+            counter++;
         }
     }
 }
@@ -282,13 +288,14 @@ __host__ void run_program() {
     std::string image_path = "tangerines.jpg";
     cv::Mat image = cv::imread(image_path);
     uint8_t* grayArray = new uint8_t[image.rows * image.cols];
-    cvMatToGrayArray(image, grayArray);
+    MatToGrayArray(image, grayArray);
 
     uint16_t number_of_iterations = 10000;
 
     // GA reproduction parameters
     uint16_t number_of_parents = 4;
     uint16_t number_of_offsprings = 8;
+    Crossover_method crossover_method = Crossover_method::UNIFORM;
 
     // mutation parameters
     float mutation_percentage = 0.01;
@@ -305,12 +312,17 @@ __host__ void run_program() {
     uint16_t number_of_threads = chromosome_size;
     uint16_t number_of_blocks = population_size * nr_of_parallel_algorithms;
     uint16_t multiple_population_size = population_size * nr_of_parallel_algorithms * chromosome_size;
-
+    uint16_t number_of_crossovers = number_of_offsprings / 2;
+    uint16_t number_of_combinations = number_of_parents * (number_of_parents - 1) / 2;
 
     // HOST variables allocation
     uint8_t* h_mpopulation = new uint8_t[multiple_population_size]; // host population
     float* h_mpopulation_fitness = new float[number_of_blocks]; // fitness for host population
     uint8_t* h_bchromosome = new uint8_t[chromosome_size]; // base chromosome
+    uint16_t* h_combinations = new uint16_t[2 * number_of_combinations]; //all possible parents combinations
+
+    //fill the combinations array
+    generate_all_idx_combinations(h_combinations, number_of_parents - 1);
 
     // DEVICE variables allocation
     uint8_t* d_mpopulation;
@@ -322,9 +334,16 @@ __host__ void run_program() {
     float* d_mpopulation_fitness;
     CUDA_CALL(cudaMalloc(&d_mpopulation_fitness, sizeof(float) * number_of_blocks));
 
+    uint16_t* d_combinations;
+    CUDA_CALL(cudaMalloc(&d_combinations, 2 * number_of_combinations * sizeof(uint16_t)));
+
+    uint16_t* d_random_pair_ids;
+    CUDA_CALL(cudaMalloc(&d_random_pair_ids, nr_of_parallel_algorithms * number_of_crossovers * sizeof(uint16_t)));
+
     // Host -> Device
     CUDA_CALL(cudaMemcpy(d_mpopulation, h_mpopulation, sizeof(uint8_t) * multiple_population_size, cudaMemcpyHostToDevice));
     CUDA_CALL(cudaMemcpy(d_bchromosome, h_bchromosome, sizeof(uint8_t) * chromosome_size, cudaMemcpyHostToDevice));
+    CUDA_CALL(cudaMemcpy(d_combinations, h_combinations, 2 * number_of_combinations * sizeof(uint16_t), cudaMemcpyHostToDevice));
 
     // DEVICE curandState initialization
     curandState* devStates;
@@ -335,11 +354,16 @@ __host__ void run_program() {
     populationInit_multi_blocks <<< number_of_blocks, number_of_threads >>> (d_mpopulation, devStates);
 
 
+    //-----------loop start----------
 
     //fitness_function(d_bchromosome, chromosome_size, d_mpopulation, multiple_population_size, number_of_blocks, number_of_threads, d_mpopulation_fitness);
 
 
+    //perform_crossover <<<nr_of_parallel_algorithms, number_of_threads >>> (<POPULATION_AFTER_SELECTION>, d_mpopulation, number_of_offsprings,
+    //                                                                        crossover_method, number_of_parents, chromosome_size, devStates,
+    //                                                                        d_combinations, d_random_pair_ids);
 
+    //-----------loop end----------
 
     // ------------------------------------------ genetic algorithm end ------------------------------------------
 
@@ -358,40 +382,15 @@ __host__ void run_program() {
     cudaFree(d_mpopulation);
     cudaFree(d_mpopulation_fitness);
     cudaFree(d_bchromosome);
+    cudaFree(&devStates);
+    cudaFree(d_combinations);
+    cudaFree(d_random_pair_ids);
     // free all host memory
     delete[] h_mpopulation;
     delete[] h_mpopulation_fitness;
     delete[] h_bchromosome;
+    delete[] h_combinations;
 
-
-
-
-
-
-
-    // for random number generation on GPU
-    curandState* d_state;
-    std::cout << d_state->d << std::endl;
-    cudaMalloc(&d_state, sizeof(curandState));
-    setup_curand << <1, nr_of_parallel_algorithms >> > (d_state);
-
-    
-    //cudaDeviceSynchronize();
-    size_t combinations_nr = number_of_parents * (number_of_parents - 1) / 2;
-    int* combinations = new int[combinations_nr];
-    generate_all_idx_combinations(combinations, number_of_parents - 1);
-    cudaMalloc(&combinations, combinations_nr * sizeof(int));
-    //perform_crossover << < >> > ();
-
-
-
-    // imgRGB2chromosome(...)
-    
-    // kernel launch
-    // reproduce_image(...);
-
-    delete[] combinations;
-    cudaFree(&d_state);
     ////Display the result image
     //cv::Mat resultImage = grayArrayToCvMat(image, grayArray);
     //delete[] grayArray;
