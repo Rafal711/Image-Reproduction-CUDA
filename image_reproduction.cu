@@ -7,6 +7,11 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
 
+#include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
+#include <thrust/sort.h>
+#include <thrust/execution_policy.h>
+
 #include <iostream>
 #include <string>
 #include <vector>
@@ -225,37 +230,37 @@ __global__ void populationInit_multi_blocks(uint8_t* population, curandState* st
 }
 
 __global__ void sum_individual_chromosomes(uint8_t* population, float* chromosomes_sums) {
-    extern __shared__ float sum_result[];
+    __shared__ float sum_result;
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    sum_result[blockIdx.x] = 0;
-    atomicAdd(&sum_result[blockIdx.x], static_cast<float>(population[idx]));
+    sum_result = 0;
+    atomicAdd(&sum_result, static_cast<float>(population[idx]));
     __syncthreads();
-    chromosomes_sums[blockIdx.x] = sum_result[blockIdx.x];
+    chromosomes_sums[blockIdx.x] = sum_result;
 }
 
 __global__ void sum_individual_chromosomes(float* population, float* chromosomes_sums) {
-    extern __shared__ float sum_result[];
+    __shared__ float sum_result;
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    sum_result[blockIdx.x] = 0;
-    atomicAdd(&sum_result[blockIdx.x], population[idx]);
+    sum_result = 0;
+    atomicAdd(&sum_result, population[idx]);
     __syncthreads();
-    chromosomes_sums[blockIdx.x] = sum_result[blockIdx.x];
+    chromosomes_sums[blockIdx.x] = sum_result;
 }
 
 __global__ void abs_subtract_individual_chromosomes(uint8_t* base_chromosome, uint8_t* population, float* chromosomes_differences) {
     extern __shared__ float subtraction_result[];
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    subtraction_result[idx] = static_cast<float>(base_chromosome[threadIdx.x] - population[idx]);
+    subtraction_result[threadIdx.x] = static_cast<float>(base_chromosome[threadIdx.x] - population[idx]);
     __syncthreads();
-    chromosomes_differences[idx] = abs(subtraction_result[idx]);
+    chromosomes_differences[idx] = abs(subtraction_result[threadIdx.x]);
 }
 
 __global__ void subtract_individual_chromosomes(float* base_chromosome, float* population, float* chromosomes_differences) {
     extern __shared__ float subtraction_result[];
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    subtraction_result[idx] = static_cast<float>(base_chromosome[threadIdx.x] - population[idx]);
+    subtraction_result[threadIdx.x] = static_cast<float>(base_chromosome[threadIdx.x] - population[idx]);
     __syncthreads();
-    chromosomes_differences[idx] = subtraction_result[idx];
+    chromosomes_differences[idx] = subtraction_result[threadIdx.x];
 }
 
 __global__ void divide_vector_element_wise(float* cuda_vector, float denominator) {
@@ -270,18 +275,52 @@ void fitness_function(uint8_t* base_chromosome, uint16_t chromosome_size, uint8_
     CUDA_CALL_V(cudaMalloc(&d_partial_results, sizeof(float) * multiple_population_size));
     CUDA_CALL_V(cudaMalloc(&d_base_chromosome_sum, sizeof(float) * number_of_blocks));
 
-    abs_subtract_individual_chromosomes <<< number_of_blocks, number_of_threads, sizeof(float)* multiple_population_size >>> (base_chromosome, population, d_partial_results);
+    abs_subtract_individual_chromosomes <<< number_of_blocks, number_of_threads, sizeof(float)* number_of_threads >>> (base_chromosome, population, d_partial_results);
 
-    sum_individual_chromosomes <<< number_of_blocks, number_of_threads, number_of_blocks * sizeof(float) >>> (d_partial_results, population_fitness);
+    sum_individual_chromosomes <<< number_of_blocks, number_of_threads >>> (d_partial_results, population_fitness);
 
     divide_vector_element_wise <<< number_of_blocks, 1 >>> (population_fitness, chromosome_size);
 
-    sum_individual_chromosomes <<< 1, number_of_threads, sizeof(float) >>> (base_chromosome, d_base_chromosome_sum);
+    sum_individual_chromosomes <<< 1, number_of_threads >>> (base_chromosome, d_base_chromosome_sum);
 
-    subtract_individual_chromosomes <<< number_of_blocks, 1, sizeof(float)* number_of_blocks >>> (d_base_chromosome_sum, population_fitness, population_fitness);
+    subtract_individual_chromosomes <<< number_of_blocks, 1, sizeof(float) >>> (d_base_chromosome_sum, population_fitness, population_fitness);
 
     cudaFree(d_partial_results);
     cudaFree(d_base_chromosome_sum);
+}
+
+__global__ void sort_population_by_indicies(uint8_t* population, int* indicies) {
+    extern __shared__ uint8_t temp_chromosome[];
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int targetIdx = indicies[idx];
+    temp_chromosome[threadIdx.x] = population[targetIdx];
+    __syncthreads();
+    population[idx] = temp_chromosome[threadIdx.x];
+}
+
+void sort_population_by_fitness(uint8_t* population, float* population_fitness, uint16_t population_fit_size, uint16_t population_size, uint16_t number_of_blocks, uint16_t number_of_threads, uint16_t multiple_population_size) {
+    auto population_fit_th = thrust::device_ptr<float>(population_fitness);
+
+    thrust::device_vector<int> indicies(population_fit_size);
+    for (int i = 0; i < population_fit_size; ++i) {
+        indicies[i] = i;
+    }
+
+    for (int i = 0; i < population_fit_size; ++i) {
+        auto fit_it = population_fit_th + i * population_size;
+        auto idx_it = indicies.begin() + i * population_size;
+        thrust::stable_sort_by_key(thrust::device, fit_it, fit_it + population_size, idx_it, thrust::greater<float>());
+    }
+
+    thrust::device_vector<int> extended_indicies(multiple_population_size);
+    for (std::size_t i = 0; i < population_fit_size; ++i) {
+        for (std::size_t j = 0; j < number_of_threads; ++j) {
+            extended_indicies[i * number_of_threads + j] = indicies[i] * number_of_threads + j;
+        }
+    }
+
+    auto* indicies_dptr = thrust::raw_pointer_cast(&extended_indicies[0]);
+    sort_population_by_indicies <<< number_of_blocks, number_of_threads, sizeof(uint8_t)* number_of_threads >>> (population, indicies_dptr);
 }
 
 __host__ void run_program() {
@@ -357,6 +396,8 @@ __host__ void run_program() {
     //-----------loop start----------
 
     //fitness_function(d_bchromosome, chromosome_size, d_mpopulation, multiple_population_size, number_of_blocks, number_of_threads, d_mpopulation_fitness);
+
+    //sort_population_by_fitness(d_mpopulation, d_mpopulation_fitness, number_of_blocks, population_size, number_of_blocks, number_of_threads, multiple_population_size);
 
 
     //perform_crossover <<<nr_of_parallel_algorithms, number_of_threads >>> (<POPULATION_AFTER_SELECTION>, d_mpopulation, number_of_offsprings,
