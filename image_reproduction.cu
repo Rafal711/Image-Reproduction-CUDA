@@ -1,4 +1,4 @@
-#include <cuda_runtime.h>
+﻿#include <cuda_runtime.h>
 #include <curand.h>
 #include <curand_kernel.h>
 #include "device_launch_parameters.h"
@@ -189,7 +189,43 @@ __global__ void perform_crossover(uint8_t* selected_pool, uint8_t* offsprings,
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
+// MUTATION
 
+__global__ void replacement(uint8_t* population, const float mutationPercentage, const uint16_t chromosomeLength, curandState* state) {
+    
+    int chromosomeId = blockIdx.x;
+    const int range{ 255 };
+    uint16_t numOfGenesToMutation = (uint16_t)(ceil(mutationPercentage * chromosomeLength));
+    extern __shared__ uint16_t idToReplace[];
+    extern __shared__ uint8_t valueTiReplace[];
+    //uint16_t* idToReplace = new uint16_t[numOfGenesToMutation];
+    //uint8_t* valueTiReplace = new uint8_t[numOfGenesToMutation];
+    generate_random_unique_array(&state[chromosomeId], idToReplace, numOfGenesToMutation, chromosomeId * chromosomeLength, chromosomeId * chromosomeLength + chromosomeLength - 1);
+    generate_random_unique_array(&state[chromosomeId], idToReplace, numOfGenesToMutation, 0, range);
+    __syncthreads();
+
+    for (int i = 0; i < numOfGenesToMutation; i++) {
+        population[idToReplace[i]] = valueTiReplace[i];
+    }
+
+    //delete[] idToReplace;
+    //delete[] valueTiReplace;
+}
+
+__global__ void randomSwap(uint8_t* population, const uint16_t* randomValues) {
+
+}
+
+__global__ void adjecentSwap(uint8_t* population, const uint16_t* randomValues) {
+     
+}
+
+void performMutation(uint8_t* population, const float mutationPercentage, const uint16_t chromosomeLength, uint16_t number_of_blocks, void(*mutationFuncPtr)(uint8_t*, const float, const uint16_t, curandState*), curandState* state) {
+
+    mutationFuncPtr <<< number_of_blocks, 1 >>> (population, mutationPercentage, chromosomeLength, state);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
 
 void cvMatToGrayArray(const cv::Mat& image, uint8_t* array) {
     cv::Mat greyMat;
@@ -368,7 +404,7 @@ __host__ void run_program() {
     std::string image_path = "tangerines.jpg";
     cv::Mat image = cv::imread(image_path);
     uint8_t* grayArray = new uint8_t[image.rows * image.cols];
-    MatToGrayArray(image, grayArray);
+    cvMatToGrayArray(image, grayArray);
 
     uint16_t number_of_iterations = 10000;
 
@@ -379,6 +415,7 @@ __host__ void run_program() {
 
     // mutation parameters
     float mutation_percentage = 0.01;
+    void(*mutationMethodPtr)(uint8_t*, const float, const uint16_t, curandState*) = replacement;
 
     // termination condition
     float epsilon = 1.0E-12F;
@@ -447,6 +484,8 @@ __host__ void run_program() {
     //perform_crossover <<<nr_of_parallel_algorithms, number_of_threads >>> (<POPULATION_AFTER_SELECTION>, d_mpopulation, number_of_offsprings,
     //                                                                        crossover_method, number_of_parents, chromosome_size, devStates,
     //                                                                        d_combinations, d_random_pair_ids);
+
+    performMutation(d_mpopulation, mutation_percentage, chromosome_size, number_of_blocks, mutationMethodPtr, devStates);
 
     //-----------loop end----------
 
