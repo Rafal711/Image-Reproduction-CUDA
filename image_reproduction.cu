@@ -11,6 +11,7 @@
 #include <thrust/host_vector.h>
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
+#include <thrust/copy.h>
 
 #include <iostream>
 #include <string>
@@ -269,7 +270,15 @@ __global__ void divide_vector_element_wise(float* cuda_vector, float denominator
     __syncthreads();
 }
 
-void fitness_function(uint8_t* base_chromosome, uint16_t chromosome_size, uint8_t* population, uint16_t multiple_population_size, uint16_t number_of_blocks, uint16_t number_of_threads, float* population_fitness) {
+void fitness_function(
+    uint8_t* base_chromosome,
+    uint16_t chromosome_size,
+    uint8_t* population,
+    uint16_t multiple_population_size,
+    uint16_t number_of_blocks,
+    uint16_t number_of_threads,
+    float* population_fitness)
+{
 
     float* d_partial_results; float* d_base_chromosome_sum;
     CUDA_CALL_V(cudaMalloc(&d_partial_results, sizeof(float) * multiple_population_size));
@@ -298,7 +307,15 @@ __global__ void sort_population_by_indicies(uint8_t* population, int* indicies) 
     population[idx] = temp_chromosome[threadIdx.x];
 }
 
-void sort_population_by_fitness(uint8_t* population, float* population_fitness, uint16_t population_fit_size, uint16_t population_size, uint16_t number_of_blocks, uint16_t number_of_threads, uint16_t multiple_population_size) {
+void sort_population_by_fitness(
+    uint8_t* population,
+    float* population_fitness,
+    uint16_t population_fit_size,
+    uint16_t population_size,
+    uint16_t number_of_blocks,
+    uint16_t number_of_threads,
+    uint16_t multiple_population_size)
+{
     auto population_fit_th = thrust::device_ptr<float>(population_fitness);
 
     thrust::device_vector<int> indicies(population_fit_size);
@@ -321,6 +338,30 @@ void sort_population_by_fitness(uint8_t* population, float* population_fitness, 
 
     auto* indicies_dptr = thrust::raw_pointer_cast(&extended_indicies[0]);
     sort_population_by_indicies <<< number_of_blocks, number_of_threads, sizeof(uint8_t)* number_of_threads >>> (population, indicies_dptr);
+}
+
+void ranking(
+    uint8_t* population,
+    float* population_fitness,
+    uint8_t* mating_pool,
+    uint16_t number_of_parents,
+    uint16_t number_of_algorithms,
+    uint16_t chromosome_size,
+    uint16_t population_size,
+    uint16_t number_of_blocks,
+    uint16_t multiple_population_size)
+{
+    sort_population_by_fitness(population, population_fitness, number_of_blocks, population_size, number_of_blocks, chromosome_size, multiple_population_size);
+
+    auto population_th = thrust::device_ptr<uint8_t>(population);
+    auto mating_pool_th = thrust::device_ptr<uint8_t>(mating_pool);
+
+    for (std::size_t i = 0; i < number_of_algorithms; ++i) {
+        auto source_start = population_th + i * population_size * chromosome_size;
+        int offset_tgt = i * number_of_parents * chromosome_size;
+        int copy_range = number_of_parents * chromosome_size;
+        thrust::copy(thrust::device, source_start, source_start + copy_range, mating_pool_th + offset_tgt);
+    }
 }
 
 __host__ void run_program() {
@@ -359,6 +400,7 @@ __host__ void run_program() {
     float* h_mpopulation_fitness = new float[number_of_blocks]; // fitness for host population
     uint8_t* h_bchromosome = new uint8_t[chromosome_size]; // base chromosome
     uint16_t* h_combinations = new uint16_t[2 * number_of_combinations]; //all possible parents combinations
+    uint8_t* h_mating_pool = new uint8_t[number_of_parents * chromosome_size * nr_of_parallel_algorithms];
 
     //fill the combinations array
     generate_all_idx_combinations(h_combinations, number_of_parents - 1);
@@ -372,6 +414,9 @@ __host__ void run_program() {
 
     float* d_mpopulation_fitness;
     CUDA_CALL(cudaMalloc(&d_mpopulation_fitness, sizeof(float) * number_of_blocks));
+
+    uint8_t* d_mating_pool;
+    CUDA_CALL(cudaMalloc(&d_mating_pool, sizeof(uint8_t) * number_of_parents * chromosome_size * nr_of_parallel_algorithms));
 
     uint16_t* d_combinations;
     CUDA_CALL(cudaMalloc(&d_combinations, 2 * number_of_combinations * sizeof(uint16_t)));
@@ -397,8 +442,7 @@ __host__ void run_program() {
 
     //fitness_function(d_bchromosome, chromosome_size, d_mpopulation, multiple_population_size, number_of_blocks, number_of_threads, d_mpopulation_fitness);
 
-    //sort_population_by_fitness(d_mpopulation, d_mpopulation_fitness, number_of_blocks, population_size, number_of_blocks, number_of_threads, multiple_population_size);
-
+    //ranking(d_mpopulation, d_mpopulation_fitness, d_mating_pool, number_of_parents, nr_of_parallel_algorithms, chromosome_size, population_size, number_of_blocks, multiple_population_size);
 
     //perform_crossover <<<nr_of_parallel_algorithms, number_of_threads >>> (<POPULATION_AFTER_SELECTION>, d_mpopulation, number_of_offsprings,
     //                                                                        crossover_method, number_of_parents, chromosome_size, devStates,
@@ -413,6 +457,7 @@ __host__ void run_program() {
     CUDA_CALL(cudaMemcpy(h_mpopulation, d_mpopulation, sizeof(uint8_t) * multiple_population_size, cudaMemcpyDeviceToHost));
     cudaDeviceSynchronize();
     CUDA_CALL(cudaMemcpy(h_mpopulation_fitness, d_mpopulation_fitness, sizeof(float) * number_of_blocks, cudaMemcpyDeviceToHost));
+    CUDA_CALL(cudaMemcpy(h_mating_pool, d_mating_pool, sizeof(uint8_t) * number_of_parents * chromosome_size * nr_of_parallel_algorithms, cudaMemcpyDeviceToHost));
 
     // show results
     for (std::size_t i = 0; i < multiple_population_size; ++i) {
@@ -426,11 +471,13 @@ __host__ void run_program() {
     cudaFree(&devStates);
     cudaFree(d_combinations);
     cudaFree(d_random_pair_ids);
+    cudaFree(d_mating_pool);
     // free all host memory
     delete[] h_mpopulation;
     delete[] h_mpopulation_fitness;
     delete[] h_bchromosome;
     delete[] h_combinations;
+    delete[] h_mating_pool;
 
     ////Display the result image
     //cv::Mat resultImage = grayArrayToCvMat(image, grayArray);
