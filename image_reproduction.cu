@@ -43,6 +43,7 @@ __device__ void generate_random_unique_array(curandState * state, uint16_t * tab
             unique = 1;
             float random = curand_uniform(&state[state_idx]);
             random *= (max - min + 0.999999);
+            random += min;
             tab[i] = (uint16_t)truncf(random);
             for (int j = 0; j < i; j++) {
                 if (tab[i] == tab[j]) {
@@ -195,50 +196,43 @@ __global__ void replacement(uint8_t* population, const float mutationPercentage,
     
     int chromosomeId = blockIdx.x;
     const int range{ 255 };
-    uint16_t numOfGenesToMutation = (uint16_t)(ceil(mutationPercentage * chromosomeLength));
-    extern __shared__ uint16_t idToReplace[];
-    extern __shared__ uint8_t valueTiReplace[];
-    //uint16_t* idToReplace = new uint16_t[numOfGenesToMutation];
-    //uint8_t* valueTiReplace = new uint8_t[numOfGenesToMutation];
-    generate_random_unique_array(&state[chromosomeId], idToReplace, numOfGenesToMutation, chromosomeId * chromosomeLength, chromosomeId * chromosomeLength + chromosomeLength - 1);
-    generate_random_unique_array(&state[chromosomeId], idToReplace, numOfGenesToMutation, 0, range);
-    __syncthreads();
+    uint16_t numOfGenesToMutation = (uint16_t)(floor(mutationPercentage * chromosomeLength));
+    uint16_t* idToReplace = new uint16_t[numOfGenesToMutation];
+    uint16_t* valueToReplace = new uint16_t[numOfGenesToMutation];
+    generate_random_unique_array(state, idToReplace, numOfGenesToMutation, (int)(chromosomeId * chromosomeLength), (int)(chromosomeId * chromosomeLength + chromosomeLength - 1));
+    generate_random_unique_array(state, valueToReplace, numOfGenesToMutation, 0, range);
 
     for (int i = 0; i < numOfGenesToMutation; i++) {
-        population[idToReplace[i]] = valueTiReplace[i];
+        population[idToReplace[i]] = valueToReplace[i];
     }
 
-    //delete[] idToReplace;
-    //delete[] valueTiReplace;
+    delete[] idToReplace;
+    delete[] valueToReplace;
 }
 
 __global__ void randomSwap(uint8_t* population, const float mutationPercentage, const uint16_t chromosomeLength, curandState* state) {
     
     int chromosomeId = blockIdx.x;
-    uint16_t numOfGenesToMutation = (uint16_t)(ceil(mutationPercentage * chromosomeLength)) * 2;
+    uint16_t numOfGenesToMutation = (uint16_t)(floor(mutationPercentage * chromosomeLength)) * 2;
     uint16_t tempGene;
-    extern __shared__ uint16_t idToSwap[];
-    //uint16_t* idToSwap = new uint16_t[numOfGenesToMutation];
-    generate_random_unique_array(&state[chromosomeId], idToSwap, numOfGenesToMutation, chromosomeId * chromosomeLength, chromosomeId * chromosomeLength + chromosomeLength - 1);
-    __syncthreads();
-
-    for (int i = 0; i < numOfGenesToMutation; i++) {
+    uint16_t* idToSwap = new uint16_t[numOfGenesToMutation];
+    generate_random_unique_array(state, idToSwap, numOfGenesToMutation, (int)(chromosomeId * chromosomeLength), (int)(chromosomeId * chromosomeLength + chromosomeLength - 1));
+ 
+    for (int i = 0; i < (int)(numOfGenesToMutation/2); i++) {
         tempGene = population[idToSwap[i]];
         population[idToSwap[i]] = population[idToSwap[numOfGenesToMutation - 1 - i]];
         population[idToSwap[numOfGenesToMutation - 1 - i]] = tempGene;
     }
     
-    //delete[] idToSwap;
+    delete[] idToSwap;
 }
 
 __global__ void adjecentSwap(uint8_t* population, const float mutationPercentage, const uint16_t chromosomeLength, curandState* state) {
     int chromosomeId = blockIdx.x;
-    uint16_t numOfGenesToMutation = (uint16_t)(ceil(mutationPercentage * chromosomeLength)) * 2;
+    uint16_t numOfGenesToMutation = (uint16_t)(floor(mutationPercentage * chromosomeLength));
     uint16_t swapGene;
-    extern __shared__ uint16_t idToSwap[];
-    //uint16_t* idToSwap = new uint16_t[numOfGenesToMutation];
-    generate_random_unique_array(&state[chromosomeId], idToSwap, numOfGenesToMutation, chromosomeId * chromosomeLength + 1, chromosomeId * chromosomeLength + chromosomeLength - 1);
-    __syncthreads();
+    uint16_t* idToSwap = new uint16_t[numOfGenesToMutation];
+    generate_random_unique_array(state, idToSwap, numOfGenesToMutation, (int)(chromosomeId * chromosomeLength + 1), (int)(chromosomeId * chromosomeLength + chromosomeLength - 1));
 
     for (int i = 0; i < numOfGenesToMutation; i++) {
         swapGene = population[idToSwap[i] - 1];
@@ -246,7 +240,7 @@ __global__ void adjecentSwap(uint8_t* population, const float mutationPercentage
         population[idToSwap[i]] = swapGene;
     }
 
-    //delete[] idToSwap;
+    delete[] idToSwap;
 }
 
 void performMutation(uint8_t* population, const float mutationPercentage, const uint16_t chromosomeLength, uint16_t number_of_blocks, void(*mutationFuncPtr)(uint8_t*, const float, const uint16_t, curandState*), curandState* state) {
