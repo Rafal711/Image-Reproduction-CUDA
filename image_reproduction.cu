@@ -13,6 +13,7 @@
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
 #include <thrust/copy.h>
+#include <thrust/extrema.h>
 
 #include <iostream>
 #include <string>
@@ -424,6 +425,30 @@ void ranking(
     }
 }
 
+void find_best_chromosome(
+    uint8_t* population,
+    float* population_fitness,
+    uint8_t* curr_best,
+    uint16_t number_of_blocks,
+    uint16_t chromosome_size)
+{
+    uint8_t* d_curr_best;
+    CUDA_CALL_V(cudaMalloc(&d_curr_best, sizeof(uint8_t) * chromosome_size));
+
+    auto population_th = thrust::device_ptr<uint8_t>(population);
+    auto population_fit_th = thrust::device_ptr<float>(population_fitness);
+    auto d_curr_best_th = thrust::device_ptr<uint8_t>(d_curr_best);
+
+    auto largest_it = thrust::max_element(population_fit_th, population_fit_th + number_of_blocks);
+    int largest_pop_idx = largest_it - population_fit_th;
+
+    auto copy_start = population_th + largest_pop_idx * chromosome_size;
+    thrust::copy(thrust::device, copy_start, copy_start + chromosome_size, d_curr_best);
+
+    CUDA_CALL_V(cudaMemcpy(curr_best, d_curr_best, sizeof(uint8_t) * chromosome_size, cudaMemcpyDeviceToHost));
+    cudaFree(d_curr_best);
+}
+
 __host__ void run_program() {
     std::string image_path = "tangerines.jpg";
     cv::Mat image = cv::imread(image_path);
@@ -462,6 +487,7 @@ __host__ void run_program() {
     uint8_t* h_bchromosome = new uint8_t[chromosome_size]; // base chromosome
     uint16_t* h_combinations = new uint16_t[2 * number_of_combinations]; //all possible parents combinations
     uint8_t* h_mating_pool = new uint8_t[number_of_parents * chromosome_size * nr_of_parallel_algorithms];
+    uint8_t* curr_best = new uint8_t[chromosome_size];
 
     //fill the combinations array
     generate_all_idx_combinations(h_combinations, number_of_parents - 1);
@@ -511,6 +537,8 @@ __host__ void run_program() {
 
     //performMutation(d_mpopulation, mutation_percentage, chromosome_size, number_of_blocks, mutationMethodPtr, devStates);
 
+    //find_best_chromosome(d_mpopulation, d_mpopulation_fitness, curr_best, number_of_blocks, chromosome_size);
+
     //-----------loop end----------
 
     // ------------------------------------------ genetic algorithm end ------------------------------------------
@@ -541,6 +569,7 @@ __host__ void run_program() {
     delete[] h_bchromosome;
     delete[] h_combinations;
     delete[] h_mating_pool;
+    delete[] curr_best;
 
     ////Display the result image
     //cv::Mat resultImage = grayArrayToCvMat(image, grayArray);
