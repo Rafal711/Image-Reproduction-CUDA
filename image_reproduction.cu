@@ -1,7 +1,7 @@
-﻿#include <cuda_runtime.h>
 #include <curand.h>
 #include <curand_kernel.h>
 #include "device_launch_parameters.h"
+#include <cuda_runtime.h>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -18,7 +18,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
-
+#include <fstream>
 #include <stdio.h>
 #include <math.h>
 
@@ -34,7 +34,7 @@
 
 
 
-__device__ void generate_random_unique_array(curandState * state, uint16_t * tab,
+__device__ void generate_random_unique_array(curandState* state, uint16_t* tab,
     const int length, const int min, const int max) {
 
     int state_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -69,8 +69,8 @@ enum Crossover_method {
 
 // single single-point crossover operation
 __device__ void single_point(const uint8_t* parentA, const uint8_t* parentB,
-                             uint8_t* offspringA, uint8_t* offspringB,
-                             const uint16_t crossover_point) {
+    uint8_t* offspringA, uint8_t* offspringB,
+    const uint16_t crossover_point) {
 
     int gene_idx = threadIdx.x;   // index of a gene in a parent chromosome
 
@@ -87,8 +87,8 @@ __device__ void single_point(const uint8_t* parentA, const uint8_t* parentB,
 
 // single two-point crossover operation
 __device__ void two_point(const uint8_t* parentA, const uint8_t* parentB,
-                          uint8_t* offspringA, uint8_t* offspringB,
-                          const int first_crossover_point, const int second_crossover_point) {
+    uint8_t* offspringA, uint8_t* offspringB,
+    const int first_crossover_point, const int second_crossover_point) {
 
     int gene_idx = threadIdx.x;   // index of a gene in a parent chromosome
 
@@ -104,8 +104,8 @@ __device__ void two_point(const uint8_t* parentA, const uint8_t* parentB,
 
 // single uniform crossover operation
 __device__ void uniform(const uint8_t* parentA, const uint8_t* parentB,
-                        uint8_t* offspringA, uint8_t* offspringB,
-                        const bool crossover_mask) {
+    uint8_t* offspringA, uint8_t* offspringB,
+    const bool crossover_mask) {
 
     int gene_idx = threadIdx.x;   // index of a gene in a parent chromosome
 
@@ -121,9 +121,9 @@ __device__ void uniform(const uint8_t* parentA, const uint8_t* parentB,
 
 // choosing parent pairs and calling a chosen crossover method 
 __global__ void perform_crossover(uint8_t* selected_pool, uint8_t* offsprings,
-                                  const uint16_t number_of_offsprings, const Crossover_method method,
-                                  const uint16_t pool_size, const uint16_t chromosome_length,
-                                  curandState* state, const uint16_t* combinations, uint16_t* random_ids) {
+    const uint16_t number_of_offsprings, const Crossover_method method,
+    const uint16_t pool_size, const uint16_t chromosome_length,
+    curandState* state, const uint16_t* combinations, uint16_t* random_ids) {
 
     // calculating indices
     int algorithm_idx = blockIdx.x;
@@ -142,7 +142,7 @@ __global__ void perform_crossover(uint8_t* selected_pool, uint8_t* offsprings,
         generate_random_unique_array(state, random_ids + block_population_start_idx, number_of_crossovers, 0, max);
     }
     __syncthreads(); //synchronize so all the threads see the generated values
-   
+
     //iterating over parent pairs
     for (int pair_id = 0; pair_id < number_of_crossovers; pair_id++) {
 
@@ -162,7 +162,7 @@ __global__ void perform_crossover(uint8_t* selected_pool, uint8_t* offsprings,
         if (method == Crossover_method::SINGLE_POINT) {
             __shared__ uint16_t crossover_point;
             if (threadIdx.x == 0) {
-                float random = curand_uniform(&state[algorithm_idx]) * (chromosome_length - 1 + 0.999999);
+                float random = curand_uniform(&state[blockIdx.x * blockDim.x + threadIdx.x]) * (chromosome_length - 1 + 0.999999);
                 crossover_point = (int)truncf(random);
             }
             __syncthreads();
@@ -171,7 +171,7 @@ __global__ void perform_crossover(uint8_t* selected_pool, uint8_t* offsprings,
         else if (method == Crossover_method::TWO_POINT) {
             __shared__ uint16_t crossover_points[2];
             if (threadIdx.x == 0) {
-                generate_random_unique_array(state, crossover_points, 2, 0, chromosome_length-1);
+                generate_random_unique_array(state, crossover_points, 2, 0, chromosome_length - 1);
             }
             __syncthreads();
             if (crossover_points[0] < crossover_points[1]) {
@@ -195,7 +195,7 @@ __global__ void perform_crossover(uint8_t* selected_pool, uint8_t* offsprings,
 // MUTATION
 
 __global__ void replacement(uint8_t* population, const float mutationPercentage, const uint16_t chromosomeLength, curandState* state) {
-    
+
     int chromosomeId = blockIdx.x;
     const int range{ 255 };
     uint16_t numOfGenesToMutation = (uint16_t)(floor(mutationPercentage * chromosomeLength));
@@ -213,19 +213,19 @@ __global__ void replacement(uint8_t* population, const float mutationPercentage,
 }
 
 __global__ void randomSwap(uint8_t* population, const float mutationPercentage, const uint16_t chromosomeLength, curandState* state) {
-    
+
     int chromosomeId = blockIdx.x;
     uint16_t numOfGenesToMutation = (uint16_t)(floor(mutationPercentage * chromosomeLength)) * 2;
     uint16_t tempGene;
     uint16_t* idToSwap = new uint16_t[numOfGenesToMutation];
     generate_random_unique_array(state, idToSwap, numOfGenesToMutation, (int)(chromosomeId * chromosomeLength), (int)(chromosomeId * chromosomeLength + chromosomeLength - 1));
- 
-    for (int i = 0; i < (int)(numOfGenesToMutation/2); i++) {
+
+    for (int i = 0; i < (int)(numOfGenesToMutation / 2); i++) {
         tempGene = population[idToSwap[i]];
         population[idToSwap[i]] = population[idToSwap[numOfGenesToMutation - 1 - i]];
         population[idToSwap[numOfGenesToMutation - 1 - i]] = tempGene;
     }
-    
+
     delete[] idToSwap;
 }
 
@@ -247,7 +247,7 @@ __global__ void adjecentSwap(uint8_t* population, const float mutationPercentage
 
 void performMutation(uint8_t* population, const float mutationPercentage, const uint16_t chromosomeLength, uint16_t number_of_blocks, void(*mutationFuncPtr)(uint8_t*, const float, const uint16_t, curandState*), curandState* state) {
 
-    mutationFuncPtr <<< number_of_blocks, 1 >>> (population, mutationPercentage, chromosomeLength, state);
+    mutationFuncPtr << < number_of_blocks, 1 >> > (population, mutationPercentage, chromosomeLength, state);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -255,14 +255,14 @@ void performMutation(uint8_t* population, const float mutationPercentage, const 
 void cvMatToGrayArray(const cv::Mat& image, uint8_t* array) {
     cv::Mat greyMat;
     cv::cvtColor(image, greyMat, cv::COLOR_BGR2GRAY);
-
+    //cv::imwrite("Result_conversion.jpg", greyMat);
     for (int i = 0; i < greyMat.rows * greyMat.cols; i++) {
         array[i] = *(greyMat.begin<uint8_t>() + i);
     }
 }
 
 cv::Mat grayArrayToCvMat(const cv::Mat& image, const uint8_t* array) {
-    cv::Mat reshaped = cv::Mat(image.rows * image.cols, 1, CV_8UC1, (unsigned*)array).reshape(0, image.rows);
+    cv::Mat reshaped = cv::Mat(image.rows * image.cols, 1, CV_8UC1, (uint8_t*)array).reshape(0, image.rows);
     return reshaped;
 }
 
@@ -345,15 +345,15 @@ void fitness_function(
     CUDA_CALL_V(cudaMalloc(&d_partial_results, sizeof(float) * multiple_population_size));
     CUDA_CALL_V(cudaMalloc(&d_base_chromosome_sum, sizeof(float) * number_of_blocks));
 
-    abs_subtract_individual_chromosomes <<< number_of_blocks, number_of_threads, sizeof(float)* number_of_threads >>> (base_chromosome, population, d_partial_results);
+    abs_subtract_individual_chromosomes << < number_of_blocks, number_of_threads, sizeof(float)* number_of_threads >> > (base_chromosome, population, d_partial_results);
 
-    sum_individual_chromosomes <<< number_of_blocks, number_of_threads >>> (d_partial_results, population_fitness);
+    sum_individual_chromosomes << < number_of_blocks, number_of_threads >> > (d_partial_results, population_fitness);
 
-    divide_vector_element_wise <<< number_of_blocks, 1 >>> (population_fitness, chromosome_size);
+    divide_vector_element_wise << < number_of_blocks, 1 >> > (population_fitness, chromosome_size);
 
-    sum_individual_chromosomes <<< 1, number_of_threads >>> (base_chromosome, d_base_chromosome_sum);
+    sum_individual_chromosomes << < 1, number_of_threads >> > (base_chromosome, d_base_chromosome_sum);
 
-    subtract_individual_chromosomes <<< number_of_blocks, 1, sizeof(float) >>> (d_base_chromosome_sum, population_fitness, population_fitness);
+    subtract_individual_chromosomes << < number_of_blocks, 1, sizeof(float) >> > (d_base_chromosome_sum, population_fitness, population_fitness);
 
     cudaFree(d_partial_results);
     cudaFree(d_base_chromosome_sum);
@@ -398,7 +398,7 @@ void sort_population_by_fitness(
     }
 
     auto* indicies_dptr = thrust::raw_pointer_cast(&extended_indicies[0]);
-    sort_population_by_indicies <<< number_of_blocks, number_of_threads, sizeof(uint8_t)* number_of_threads >>> (population, indicies_dptr);
+    sort_population_by_indicies << < number_of_blocks, number_of_threads, sizeof(uint8_t)* number_of_threads >> > (population, indicies_dptr);
 }
 
 void ranking(
@@ -429,19 +429,30 @@ void find_best_chromosome(
     uint8_t* population,
     float* population_fitness,
     uint8_t* curr_best,
+    float& curr_best_fit,
+    bool& is_first_iteration,
     uint16_t number_of_blocks,
     uint16_t chromosome_size)
 {
-    uint8_t* d_curr_best;
-    CUDA_CALL_V(cudaMalloc(&d_curr_best, sizeof(uint8_t) * chromosome_size));
-
     auto population_th = thrust::device_ptr<uint8_t>(population);
     auto population_fit_th = thrust::device_ptr<float>(population_fitness);
-    auto d_curr_best_th = thrust::device_ptr<uint8_t>(d_curr_best);
-
     auto largest_it = thrust::max_element(population_fit_th, population_fit_th + number_of_blocks);
     int largest_pop_idx = largest_it - population_fit_th;
 
+    if (is_first_iteration) {
+        curr_best_fit = *largest_it;
+        is_first_iteration = false;
+    }
+
+    if (*largest_it < curr_best_fit) {
+        return;
+    }
+
+    curr_best_fit = *largest_it;
+
+    uint8_t* d_curr_best;
+    CUDA_CALL_V(cudaMalloc(&d_curr_best, sizeof(uint8_t) * chromosome_size));
+    auto d_curr_best_th = thrust::device_ptr<uint8_t>(d_curr_best);
     auto copy_start = population_th + largest_pop_idx * chromosome_size;
     thrust::copy(thrust::device, copy_start, copy_start + chromosome_size, d_curr_best);
 
@@ -449,32 +460,45 @@ void find_best_chromosome(
     cudaFree(d_curr_best);
 }
 
-__host__ void run_program() {
-    std::string image_path = "tangerines.jpg";
+bool termination_condition(float prev_fit, float curr_fit, uint16_t& counter, uint16_t border, float epsilon) {
+    if (abs(curr_fit - prev_fit) < epsilon) {
+        counter++;
+    }
+    else {
+        counter = 0;
+    }
+    if (counter == border) {
+        return true;
+    }
+    return false;
+}
+
+void run_program() {
+    std::string image_path = "onion.jpg";
     cv::Mat image = cv::imread(image_path);
     uint8_t* grayArray = new uint8_t[image.rows * image.cols];
     cvMatToGrayArray(image, grayArray);
 
-    uint16_t number_of_iterations = 10000;
-
+    uint16_t number_of_iterations = 3000;
+ 
     // GA reproduction parameters
     uint16_t number_of_parents = 4;
     uint16_t number_of_offsprings = 8;
-    Crossover_method crossover_method = Crossover_method::UNIFORM;
+    Crossover_method crossover_method = Crossover_method::SINGLE_POINT;
 
     // mutation parameters
-    float mutation_percentage = 0.01;
-    void(*mutationMethodPtr)(uint8_t*, const float, const uint16_t, curandState*) = replacement;
+    float mutation_percentage = 0.05;
+    void(*mutationMethodPtr)(uint8_t*, const float, const uint16_t, curandState*) = adjecentSwap;
 
     // termination condition
     float epsilon = 1.0E-12F;
-    uint16_t terminate_after = 500;
+    uint16_t terminate_after = 200;
+    uint16_t terminate_counter = 0;
 
-    uint16_t nr_of_parallel_algorithms = 3;
-    
+    uint16_t nr_of_parallel_algorithms = 1;
 
-    uint16_t chromosome_size = 5;
-    uint16_t population_size = 4;
+    uint16_t chromosome_size = image.rows * image.cols;
+    uint16_t population_size = number_of_offsprings;
     uint16_t number_of_threads = chromosome_size;
     uint16_t number_of_blocks = population_size * nr_of_parallel_algorithms;
     uint16_t multiple_population_size = population_size * nr_of_parallel_algorithms * chromosome_size;
@@ -488,72 +512,86 @@ __host__ void run_program() {
     uint16_t* h_combinations = new uint16_t[2 * number_of_combinations]; //all possible parents combinations
     uint8_t* h_mating_pool = new uint8_t[number_of_parents * chromosome_size * nr_of_parallel_algorithms];
     uint8_t* curr_best = new uint8_t[chromosome_size];
+    float curr_best_fit = 0;
+    float prev_best_fit = 0;
+    bool is_first_iteration = true;
 
     //fill the combinations array
     generate_all_idx_combinations(h_combinations, number_of_parents - 1);
 
     // DEVICE variables allocation
     uint8_t* d_mpopulation;
-    CUDA_CALL(cudaMalloc(&d_mpopulation, sizeof(uint8_t) * multiple_population_size));
+    CUDA_CALL_V(cudaMalloc(&d_mpopulation, sizeof(uint8_t) * multiple_population_size));
 
     uint8_t* d_bchromosome;
-    CUDA_CALL(cudaMalloc(&d_bchromosome, sizeof(uint8_t) * chromosome_size));
+    CUDA_CALL_V(cudaMalloc(&d_bchromosome, sizeof(uint8_t) * chromosome_size));
 
     float* d_mpopulation_fitness;
-    CUDA_CALL(cudaMalloc(&d_mpopulation_fitness, sizeof(float) * number_of_blocks));
+    CUDA_CALL_V(cudaMalloc(&d_mpopulation_fitness, sizeof(float) * number_of_blocks));
 
     uint8_t* d_mating_pool;
-    CUDA_CALL(cudaMalloc(&d_mating_pool, sizeof(uint8_t) * number_of_parents * chromosome_size * nr_of_parallel_algorithms));
+    CUDA_CALL_V(cudaMalloc(&d_mating_pool, sizeof(uint8_t) * number_of_parents * chromosome_size * nr_of_parallel_algorithms));
 
     uint16_t* d_combinations;
-    CUDA_CALL(cudaMalloc(&d_combinations, 2 * number_of_combinations * sizeof(uint16_t)));
+    CUDA_CALL_V(cudaMalloc(&d_combinations, 2 * number_of_combinations * sizeof(uint16_t)));
 
     uint16_t* d_random_pair_ids;
-    CUDA_CALL(cudaMalloc(&d_random_pair_ids, nr_of_parallel_algorithms * number_of_crossovers * sizeof(uint16_t)));
+    CUDA_CALL_V(cudaMalloc(&d_random_pair_ids, nr_of_parallel_algorithms * number_of_crossovers * sizeof(uint16_t)));
 
     // Host -> Device
-    CUDA_CALL(cudaMemcpy(d_mpopulation, h_mpopulation, sizeof(uint8_t) * multiple_population_size, cudaMemcpyHostToDevice));
-    CUDA_CALL(cudaMemcpy(d_bchromosome, h_bchromosome, sizeof(uint8_t) * chromosome_size, cudaMemcpyHostToDevice));
-    CUDA_CALL(cudaMemcpy(d_combinations, h_combinations, 2 * number_of_combinations * sizeof(uint16_t), cudaMemcpyHostToDevice));
+    CUDA_CALL_V(cudaMemcpy(d_mpopulation, h_mpopulation, sizeof(uint8_t) * multiple_population_size, cudaMemcpyHostToDevice));
+    CUDA_CALL_V(cudaMemcpy(d_bchromosome, grayArray, sizeof(uint8_t) * chromosome_size, cudaMemcpyHostToDevice));
+    CUDA_CALL_V(cudaMemcpy(d_combinations, h_combinations, 2 * number_of_combinations * sizeof(uint16_t), cudaMemcpyHostToDevice));
 
     // DEVICE curandState initialization
     curandState* devStates;
-    CUDA_CALL(cudaMalloc((void**)&devStates, multiple_population_size * sizeof(curandState)));
+    CUDA_CALL_V(cudaMalloc((void**)&devStates, multiple_population_size * sizeof(curandState)));
 
     // ------------------------------------------ genetic algorithm start ------------------------------------------
-    setup_kernel_multi_blocks <<< number_of_blocks, number_of_threads >>> (devStates, 7);
-    populationInit_multi_blocks <<< number_of_blocks, number_of_threads >>> (d_mpopulation, devStates);
+    setup_kernel_multi_blocks << < number_of_blocks, number_of_threads >> > (devStates, 10);
+    populationInit_multi_blocks << < number_of_blocks, number_of_threads >> > (d_mpopulation, devStates);
 
+    std::ofstream out("fitness_function_values.csv");
 
     //-----------loop start----------
+    for (int i = 0; i < number_of_iterations; i++) {
+        fitness_function(d_bchromosome, chromosome_size, d_mpopulation, multiple_population_size, number_of_blocks, number_of_threads, d_mpopulation_fitness);
 
-    //fitness_function(d_bchromosome, chromosome_size, d_mpopulation, multiple_population_size, number_of_blocks, number_of_threads, d_mpopulation_fitness);
+        ranking(d_mpopulation, d_mpopulation_fitness, d_mating_pool, number_of_parents, nr_of_parallel_algorithms, chromosome_size, population_size, number_of_blocks, multiple_population_size);
 
-    //ranking(d_mpopulation, d_mpopulation_fitness, d_mating_pool, number_of_parents, nr_of_parallel_algorithms, chromosome_size, population_size, number_of_blocks, multiple_population_size);
+        perform_crossover << < nr_of_parallel_algorithms, number_of_threads >> > (d_mating_pool, d_mpopulation, number_of_offsprings,
+            crossover_method, number_of_parents, chromosome_size, devStates,
+            d_combinations, d_random_pair_ids);
 
-    //perform_crossover <<<nr_of_parallel_algorithms, number_of_threads >>> (<POPULATION_AFTER_SELECTION>, d_mpopulation, number_of_offsprings,
-    //                                                                        crossover_method, number_of_parents, chromosome_size, devStates,
-    //                                                                        d_combinations, d_random_pair_ids);
+        performMutation(d_mpopulation, mutation_percentage, chromosome_size, number_of_blocks, mutationMethodPtr, devStates);
 
-    //performMutation(d_mpopulation, mutation_percentage, chromosome_size, number_of_blocks, mutationMethodPtr, devStates);
+        prev_best_fit = curr_best_fit;
 
-    //find_best_chromosome(d_mpopulation, d_mpopulation_fitness, curr_best, number_of_blocks, chromosome_size);
+        find_best_chromosome(d_mpopulation, d_mpopulation_fitness, curr_best, curr_best_fit, is_first_iteration, number_of_blocks, chromosome_size);
 
+        setup_kernel_multi_blocks << < number_of_blocks, number_of_threads >> > (devStates, i);
+
+        if (termination_condition(prev_best_fit, curr_best_fit, terminate_counter, terminate_after, epsilon)) {
+            printf("TERMINATED!");
+            break;
+        }
+
+        printf("Iteration %d \n", i);
+
+    }
     //-----------loop end----------
-
+    out << '\n';
     // ------------------------------------------ genetic algorithm end ------------------------------------------
 
     // DEVICE -> HOST
-
-    CUDA_CALL(cudaMemcpy(h_mpopulation, d_mpopulation, sizeof(uint8_t) * multiple_population_size, cudaMemcpyDeviceToHost));
+    printf("Log_sync \n");
     cudaDeviceSynchronize();
-    CUDA_CALL(cudaMemcpy(h_mpopulation_fitness, d_mpopulation_fitness, sizeof(float) * number_of_blocks, cudaMemcpyDeviceToHost));
-    CUDA_CALL(cudaMemcpy(h_mating_pool, d_mating_pool, sizeof(uint8_t) * number_of_parents * chromosome_size * nr_of_parallel_algorithms, cudaMemcpyDeviceToHost));
-
-    // show results
-    for (std::size_t i = 0; i < multiple_population_size; ++i) {
-        std::cout << static_cast<int>(h_mpopulation[i]) << " ";
-    }
+    CUDA_CALL_V(cudaMemcpy(h_mpopulation, d_mpopulation, sizeof(uint8_t) * multiple_population_size, cudaMemcpyDeviceToHost));
+    printf("Log_0 \n");
+    CUDA_CALL_V(cudaMemcpy(h_mpopulation_fitness, d_mpopulation_fitness, sizeof(float) * number_of_blocks, cudaMemcpyDeviceToHost));
+    printf("Log_1 \n");
+    CUDA_CALL_V(cudaMemcpy(h_mating_pool, d_mating_pool, sizeof(uint8_t) * number_of_parents * chromosome_size * nr_of_parallel_algorithms, cudaMemcpyDeviceToHost));
+    printf("Log_2 \n");
 
     // free all device memory
     cudaFree(d_mpopulation);
@@ -569,18 +607,18 @@ __host__ void run_program() {
     delete[] h_bchromosome;
     delete[] h_combinations;
     delete[] h_mating_pool;
-    delete[] curr_best;
+    delete[] grayArray;
 
     ////Display the result image
-    //cv::Mat resultImage = grayArrayToCvMat(image, grayArray);
-    //delete[] grayArray;
-    //cv::imwrite("Result.jpg", image);
-    //cv::namedWindow("Result image", cv::WINDOW_AUTOSIZE);
-    //cv::imshow("Result image", resultImage);
-    //cv::moveWindow("Result image", 0, 45);
-    //cv::waitKey(0);
-    //cv::destroyAllWindows();
- 
+    cv::Mat resultImage = grayArrayToCvMat(image, curr_best);
+    delete[] curr_best;
+    cv::imwrite("Result.jpg", resultImage);
+    cv::namedWindow("Result image", cv::WINDOW_AUTOSIZE);
+    cv::imshow("Result image", resultImage);
+    cv::moveWindow("Result image", 0, 45);
+    cv::waitKey(0);
+    cv::destroyAllWindows();
+
 }
 
 
